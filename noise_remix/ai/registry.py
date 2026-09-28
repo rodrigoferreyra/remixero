@@ -103,6 +103,20 @@ CAPABILITY_REGISTRY: dict[str, dict[str, Any]] = {
             "hold_probability": {"min": 0.2, "max": 0.95},
         },
     },
+    "pump": {
+        "description": (
+            "Sidechain-style pumping ducking synced to tempo/transients with transient boost. "
+            "Useful for hardcore/EDM pressure without inventing drums."
+        ),
+        "executable_mode": "pump",
+        "parameters": {
+            "intensity": {"min": 0.0, "max": 1.0, "default": 0.5},
+            "pump_rate": {"min": 1.0, "max": 8.0},
+            "depth": {"min": 0.2, "max": 0.95},
+            "transient_boost": {"min": 0.0, "max": 1.0},
+            "drive": {"min": 1.0, "max": 2.8},
+        },
+    },
     "random": {
         "description": (
             "Seeded combination of fragmentation primitives (rates, stutter, band-limiting)."

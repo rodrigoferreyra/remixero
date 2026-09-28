@@ -21,7 +21,7 @@ How to handle abstract instructions:
 - Use analysis (transients, flux, centroid, segments) to place drops, builds, and breakdowns.
 - Stay inside the registry. Approximate aesthetics with available tools; never invent processors.
 - Aesthetic hints (non-exhaustive):
-  hardcore / EDM / rave → stutter + destroy pulses, high intensity, abrupt section cuts,
+  hardcore / EDM / rave → pump + stutter + destroy pulses, high intensity, abrupt section cuts,
     pitch_warp risers, feedback/comb for pressure; low source_preservation in peak sections
   industrial / noise → destroy, collapse, feedback, ring_mod; dark filtering via params
   ambient / drone → pitch_warp + granular beds, slow section changes, higher source_preservation
@@ -55,7 +55,12 @@ def build_user_prompt(
     duration_seconds: float,
     variation_index: int,
     variations: int,
+    listening_brief: object | None = None,
 ) -> str:
+    from noise_remix.ai.arrange import propose_section_bounds
+    from noise_remix.ai.brief import classify_brief
+    from noise_remix.ai.listen import ListeningBrief, listening_brief_as_prompt_block
+
     analysis_payload = {
         "duration": analysis.duration,
         "sample_rate": analysis.sample_rate,
@@ -82,12 +87,30 @@ def build_user_prompt(
             "not just tiny numeric tweaks."
         )
 
+    intent = classify_brief(instruction)
+    suggested = propose_section_bounds(
+        analysis, energy=str(intent.get("energy") or "medium")
+    )
+    arrangement_hint = (
+        "\nSuggested analysis-based section layout (prefer these boundaries; "
+        "fill processors/layers yourself):\n"
+        + json.dumps(suggested, indent=2)
+    )
+
+    listening_block = ""
+    if isinstance(listening_brief, ListeningBrief):
+        listening_block = "\n" + listening_brief_as_prompt_block(listening_brief) + "\n"
+    elif listening_brief is not None:
+        # Allow pre-rendered string blocks in tests.
+        listening_block = "\n" + str(listening_brief).strip() + "\n"
+
     return f"""Creative instruction (may be abstract — expand it into a full executable plan):
 {instruction}
 
 Target duration seconds: {duration_seconds}
 {variation_note}
-
+{arrangement_hint}
+{listening_block}
 Local deterministic analysis (use this to shape arrangement; estimated_bpm is approximate only):
 {json.dumps(analysis_payload, indent=2)}
 
@@ -96,6 +119,8 @@ Available DSP capability registry (use ONLY these processors):
 
 Constraints:
 - Interpret abstract briefs creatively; you choose sections/layers/parameters
+- Prefer the suggested section boundaries above when the brief is abstract/genre-based
+- When Gemini listening notes are present, align sections/layers to those song-specific moments
 - duration_seconds must be > 0 and <= {duration_seconds}
 - global_parameters.primary_mode must be a registry processor
 - every layer must include id + processor (registry processor only)
@@ -103,6 +128,7 @@ Constraints:
 - every active_layers entry must exactly match a layers[].id
 - typically 3–5 sections and 2–4 layers unless the brief needs less
 - use processing_chain for concrete DSP values the renderer should honor
+- optional automation events (volume/feedback/pitch_ratio/density) are rendered over time
 - design an evolving arrangement the multi-layer SuperCollider mixer will actually render
 """
 

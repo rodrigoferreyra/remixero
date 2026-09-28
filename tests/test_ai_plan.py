@@ -76,6 +76,7 @@ def test_registry_lists_executable_processors() -> None:
         "ring_mod",
         "pitch_warp",
         "stutter",
+        "pump",
     } <= names
 
 
@@ -362,6 +363,7 @@ def test_layered_render_includes_fade_envelopes() -> None:
     layers = params.details["layers"]
     assert layers
     assert any(float(layer.get("fade_out") or 0) >= 0.2 for layer in layers)
+    assert "master" in params.details
     sc_text = generate_patch(
         params=params,
         input_wav=FIXTURE,
@@ -369,6 +371,51 @@ def test_layered_render_includes_fade_envelopes() -> None:
     )
     assert "\\attack," in sc_text
     assert "\\release," in sc_text
+    assert "remixero_master" in sc_text
+    assert "drive" in sc_text
+
+
+def test_automation_scales_event_amps() -> None:
+    from noise_remix.ai.automation import apply_automation_to_layer_spec
+    from noise_remix.models.production import AutomationEvent
+
+    spec = {
+        "kind": "fragments",
+        "start": 0.0,
+        "end": 1.0,
+        "volume": 1.0,
+        "intensity": 0.5,
+        "details": {},
+        "events": [
+            {"onset": 0.1, "amp": 0.4, "dur": 0.05, "rate": 1.0, "pan": 0.0},
+            {"onset": 0.8, "amp": 0.4, "dur": 0.05, "rate": 1.0, "pan": 0.0},
+        ],
+    }
+    events = [
+        AutomationEvent(target="volume", time=0.0, value=1.0, curve="linear"),
+        AutomationEvent(target="volume", time=1.0, value=0.2, curve="linear"),
+    ]
+    out = apply_automation_to_layer_spec(spec, events=events)
+    assert out["events"][0]["amp"] > out["events"][-1]["amp"]
+
+
+def test_analysis_arrangement_builds_sections() -> None:
+    from noise_remix.ai.arrange import apply_analysis_arrangement, propose_section_bounds
+
+    analysis = analyze_audio(FIXTURE)
+    bounds = propose_section_bounds(analysis, energy="high")
+    assert len(bounds) >= 3
+    plan = validate_production_plan(_sample_plan(), source_duration=analysis.duration)
+    arranged = apply_analysis_arrangement(plan, analysis, energy="high")
+    assert len(arranged.sections) >= 3
+    assert arranged.sections[0].start == 0.0
+    assert arranged.sections[-1].end == analysis.duration
+
+
+def test_preview_option_in_help() -> None:
+    result = runner.invoke(app, ["--help"])
+    assert result.exit_code == 0
+    assert "--preview" in result.stdout
 
 
 def test_coerce_repairs_missing_sections() -> None:
@@ -571,3 +618,253 @@ def test_non_ai_modes_still_work_help() -> None:
     assert "--prompt" in result.stdout
     assert "--provider" in result.stdout
     assert "--keep-plan" in result.stdout
+    assert "--hybrid-listen" in result.stdout
+
+
+def test_prompt_includes_listening_brief() -> None:
+    from noise_remix.ai.listen import ListeningBrief, SalientMoment
+    from noise_remix.ai.prompts import build_user_prompt
+
+    analysis = analyze_audio(FIXTURE)
+    brief = ListeningBrief(
+        summary="Dense industrial track with shouted vocals.",
+        structure_notes="Intro then verse/chorus loop.",
+        salient_moments=[SalientMoment(time=0.2, label="vocal entry")],
+        preserve="kick pulse",
+        destroy="pad wash",
+        energy_curve="builds mid-track",
+    )
+    prompt = build_user_prompt(
+        instruction="make the chorus hardcore",
+        analysis=analysis,
+        duration_seconds=analysis.duration,
+        variation_index=0,
+        variations=1,
+        listening_brief=brief,
+    )
+    assert "Gemini listening notes" in prompt
+    assert "Dense industrial track" in prompt
+    assert "vocal entry" in prompt
+    assert "kick pulse" in prompt
+
+
+def test_director_skips_listen_without_gemini_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from noise_remix.ai.director import generate_production_plan
+
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+
+    analysis = analyze_audio(FIXTURE)
+    statuses: list[str] = []
+    captured: dict = {}
+
+    def fake_groq(**kwargs):
+        captured["listening_brief"] = kwargs.get("listening_brief")
+        return _sample_plan(duration_seconds=analysis.duration)
+
+    monkeypatch.setattr(
+        "noise_remix.ai.groq_client.generate_production_plan_groq",
+        fake_groq,
+    )
+    plan = generate_production_plan(
+        audio_path=FIXTURE,
+        analysis=analysis,
+        instruction="destroy",
+        duration_seconds=analysis.duration,
+        config=AIConfig(provider="groq", api_key="g", model="openai/gpt-oss-20b"),
+        hybrid_listen=True,
+        status=statuses.append,
+    )
+    assert plan.title
+    assert captured["listening_brief"] is None
+    assert any("Listen skipped" in message for message in statuses)
+
+
+def test_director_skips_listen_by_default_even_with_gemini_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from noise_remix.ai.director import generate_production_plan
+
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini-test-key")
+    analysis = analyze_audio(FIXTURE)
+    listen_calls = {"n": 0}
+    captured: dict = {}
+
+    def fake_listen(**_kwargs):
+        listen_calls["n"] += 1
+        return None
+
+    monkeypatch.setattr(
+        "noise_remix.ai.director.generate_listening_brief",
+        fake_listen,
+    )
+
+    def fake_groq(**kwargs):
+        captured["listening_brief"] = kwargs.get("listening_brief")
+        return _sample_plan(duration_seconds=analysis.duration)
+
+    monkeypatch.setattr(
+        "noise_remix.ai.groq_client.generate_production_plan_groq",
+        fake_groq,
+    )
+
+    plan = generate_production_plan(
+        audio_path=FIXTURE,
+        analysis=analysis,
+        instruction="destroy",
+        duration_seconds=analysis.duration,
+        config=AIConfig(provider="groq", api_key="g", model="openai/gpt-oss-20b"),
+        hybrid_listen=False,
+    )
+    assert plan.title
+    assert listen_calls["n"] == 0
+    assert captured["listening_brief"] is None
+
+
+def test_listen_failure_returns_none_softly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from noise_remix.ai.listen import generate_listening_brief
+
+    analysis = analyze_audio(FIXTURE)
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("upload failed")
+
+    monkeypatch.setattr(
+        "noise_remix.ai.listen.call_with_retries",
+        boom,
+    )
+    # Fail before upload by making Client raise.
+    class FakeClient:
+        def __init__(self, **_kwargs):
+            pass
+
+        class files:
+            @staticmethod
+            def upload(**_kwargs):
+                raise RuntimeError("no upload")
+
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "google.genai",
+        type("M", (), {"Client": FakeClient, "types": object()})(),
+    )
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "google",
+        type("G", (), {"genai": __import__("sys").modules["google.genai"]})(),
+    )
+
+    brief = generate_listening_brief(
+        audio_path=FIXTURE,
+        analysis=analysis,
+        instruction="listen",
+        config=AIConfig(
+            provider="gemini",
+            api_key="fake",
+            model="gemini-3.8-flash",
+        ),
+    )
+    assert brief is None
+
+
+def test_director_passes_listening_brief_to_groq(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from noise_remix.ai.director import generate_production_plan
+    from noise_remix.ai.listen import ListeningBrief
+
+    analysis = analyze_audio(FIXTURE)
+    brief = ListeningBrief(
+        summary="Chorus at 12s with big snare.",
+        preserve="snare",
+        destroy="pads",
+    )
+    statuses: list[str] = []
+    captured: dict = {}
+
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini-test-key")
+    monkeypatch.setattr(
+        "noise_remix.ai.director.load_gemini_listen_config",
+        lambda: AIConfig(
+            provider="gemini",
+            api_key="gemini-test-key",
+            model="gemini-3.8-flash",
+        ),
+    )
+    monkeypatch.setattr(
+        "noise_remix.ai.director.generate_listening_brief",
+        lambda **_kwargs: brief,
+    )
+
+    def fake_groq(**kwargs):
+        captured["listening_brief"] = kwargs.get("listening_brief")
+        return _sample_plan(duration_seconds=analysis.duration)
+
+    monkeypatch.setattr(
+        "noise_remix.ai.groq_client.generate_production_plan_groq",
+        fake_groq,
+    )
+
+    plan = generate_production_plan(
+        audio_path=FIXTURE,
+        analysis=analysis,
+        instruction="hardcore chorus",
+        duration_seconds=analysis.duration,
+        config=AIConfig(provider="groq", api_key="g", model="openai/gpt-oss-20b"),
+        hybrid_listen=True,
+        status=statuses.append,
+    )
+    assert plan.title
+    assert captured["listening_brief"] is brief
+    assert any("Listening notes attached" in message for message in statuses)
+
+
+def test_director_skips_separate_listen_for_gemini_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from noise_remix.ai.director import generate_production_plan
+
+    analysis = analyze_audio(FIXTURE)
+    statuses: list[str] = []
+    listen_calls = {"n": 0}
+
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini-test-key")
+
+    def fake_listen(**_kwargs):
+        listen_calls["n"] += 1
+        return None
+
+    monkeypatch.setattr(
+        "noise_remix.ai.director.generate_listening_brief",
+        fake_listen,
+    )
+
+    def fake_gemini(**kwargs):
+        assert kwargs.get("listening_brief") is None
+        return _sample_plan(duration_seconds=analysis.duration)
+
+    monkeypatch.setattr(
+        "noise_remix.ai.gemini.generate_production_plan",
+        fake_gemini,
+    )
+
+    plan = generate_production_plan(
+        audio_path=FIXTURE,
+        analysis=analysis,
+        instruction="sparse then violent",
+        duration_seconds=analysis.duration,
+        config=AIConfig(
+            provider="gemini",
+            api_key="gemini-test-key",
+            model="gemini-3.8-flash",
+        ),
+        hybrid_listen=True,
+        status=statuses.append,
+    )
+    assert plan.title
+    assert listen_calls["n"] == 0
+    assert any("separate listen skipped" in message for message in statuses)

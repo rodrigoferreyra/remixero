@@ -30,12 +30,14 @@ def generate_production_plan_groq(
     variation_index: int = 0,
     variations: int = 1,
     upload_audio: bool = True,
+    listening_brief: object | None = None,
 ) -> ProductionPlan:
     """Ask Groq for a structured ProductionPlan and validate it.
 
     Groq chat models do not ingest the source audio the way Gemini Files API does.
-    Local deterministic analysis is provided in the prompt instead. ``upload_audio``
-    is accepted for API symmetry and ignored.
+    Local deterministic analysis is provided in the prompt instead. When a Gemini
+    listening brief is supplied (hybrid mode), song-specific notes are included.
+    ``upload_audio`` is accepted for API symmetry and ignored.
     """
     del audio_path, upload_audio  # analysis-only context for Groq
     api_key = require_api_key(config)
@@ -57,10 +59,20 @@ def generate_production_plan_groq(
         duration_seconds=duration_seconds,
         variation_index=variation_index,
         variations=variations,
+        listening_brief=listening_brief,
     )
+    if listening_brief is None:
+        prompt += (
+            "\n\nProvider note: audio bytes are not attached on Groq; "
+            "rely on the local analysis JSON above.\n"
+        )
+    else:
+        prompt += (
+            "\n\nProvider note: audio bytes are not attached on Groq, but Gemini "
+            "listening notes above came from the source file — prefer them for "
+            "song-specific decisions.\n"
+        )
     prompt += (
-        "\n\nProvider note: audio bytes are not attached on Groq; "
-        "rely on the local analysis JSON above.\n"
         "Return ONLY valid JSON for the production plan schema.\n"
         "If the creative instruction is abstract (genre, mood, vibe), expand it into "
         "concrete sections/layers/processors yourself — do not leave it vague."

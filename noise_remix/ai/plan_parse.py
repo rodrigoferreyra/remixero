@@ -7,7 +7,8 @@ import sys
 from collections.abc import Callable
 from typing import Any
 
-from noise_remix.ai.brief import apply_brief_intent
+from noise_remix.ai.arrange import apply_analysis_arrangement
+from noise_remix.ai.brief import apply_brief_intent, classify_brief
 from noise_remix.ai.repair import parse_production_plan
 from noise_remix.ai.validate import validate_production_plan
 from noise_remix.errors import AIRequestError, ProductionPlanError
@@ -37,6 +38,18 @@ def finalize_plan_payload(
         max_duration=duration_seconds,
     )
     if instruction.strip():
+        intent = classify_brief(instruction)
+        if intent.get("abstract"):
+            plan = apply_analysis_arrangement(
+                plan,
+                analysis,
+                energy=str(intent.get("energy") or "medium"),
+            )
+            plan = validate_production_plan(
+                plan,
+                source_duration=analysis.duration,
+                max_duration=duration_seconds,
+            )
         plan = apply_brief_intent(plan, instruction)
         plan = validate_production_plan(
             plan,

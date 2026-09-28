@@ -75,6 +75,12 @@ def generate_patch(
             input_wav=input_wav,
             output_wav=output_wav,
         )
+    if engine == "pump" or params.mode == "pump":
+        return generate_pump_patch(
+            params=params,
+            input_wav=input_wav,
+            output_wav=output_wav,
+        )
     raise ValueError(f"No SuperCollider generator for mode '{params.mode}'")
 
 
@@ -479,6 +485,60 @@ def generate_pitch_warp_patch(
     )
 
 
+def generate_pump_patch(
+    *,
+    params: RemixParameters,
+    input_wav: Path,
+    output_wav: Path,
+) -> str:
+    """Sidechain-style pump with transient emphasis."""
+    details = params.details
+    pump_rate = max(1.0, min(8.0, float(details["pump_rate"])))
+    depth = max(0.0, min(0.95, float(details["depth"])))
+    pulse_width = max(0.05, min(0.45, float(details.get("pulse_width") or 0.12)))
+    transient_boost = max(0.0, min(1.0, float(details.get("transient_boost") or 0.4)))
+    drive = max(0.5, min(4.0, float(details.get("drive") or 1.5)))
+    rate = max(0.4, min(1.8, float(details.get("playback_rate") or 1.0)))
+    hpf = max(20.0, min(2000.0, float(details.get("hpf") or 60.0)))
+    lpf = max(200.0, min(18000.0, float(details.get("lpf") or 8000.0)))
+    return _generate_continuous_layer_patch(
+        params=params,
+        input_wav=input_wav,
+        output_wav=output_wav,
+        synth_name="remixero_pump",
+        arg_defaults=(
+            "|out=0, buf=0, rate=1, pumpRate=2, depth=0.7, pulseWidth=0.12, "
+            "transientBoost=0.4, drive=1.5, hpf=60, lpf=8000, "
+            "amp=0.7, pan=0, attack=0.02, sustain=1.0, release=0.05|\n"
+        ),
+        body=_pump_synth_body(params.channels),
+        start_args=(
+            f"\\rate, {rate:.6f}, \\pumpRate, {pump_rate:.6f}, \\depth, {depth:.6f}, "
+            f"\\pulseWidth, {pulse_width:.6f}, \\transientBoost, {transient_boost:.6f}, "
+            f"\\drive, {drive:.6f}, \\hpf, {hpf:.3f}, \\lpf, {lpf:.3f}, "
+            f"\\amp, 0.75, \\pan, 0.0, \\attack, 0.02, "
+            f"\\sustain, {max(0.05, params.duration - 0.07):.6f}, \\release, 0.05"
+        ),
+        comment=f"pump rate={pump_rate:.2f}Hz depth={depth:.2f}",
+    )
+
+
+def _pump_synth_body(channels: int) -> str:
+    src = _looping_src_lines(channels)
+    return f"""\
+{src}
+			var env = EnvGen.kr(Env.linen(attack, sustain, release), doneAction: 2);
+			var pulse = LFPulse.kr(pumpRate, 0, pulseWidth);
+			var duck = Lag.kr(1.0 - (pulse * depth), 0.03);
+			var filtered = HPF.ar(LPF.ar(srcStereo, lpf), hpf);
+			var pumped = filtered * duck;
+			var trans = HPF.ar(filtered, 1800) * transientBoost;
+			var driven = ((pumped + trans) * drive).tanh;
+			var limited = Limiter.ar(Balance2.ar(driven[0], driven[1], pan, amp) * env, 0.95);
+			Out.ar(out, limited);
+"""
+
+
 def generate_layered_patch(
     *,
     params: RemixParameters,
@@ -503,17 +563,27 @@ def generate_layered_patch(
     kinds = {str(layer.get("kind")) for layer in layers}
     events.extend(_layered_synthdefs(channels=channels, kinds=kinds, mix_bus=mix_bus))
     events.append(f'\t[0.0, ["/b_allocRead", 0, "{in_path}"]],')
-    # Master: read mix bus → Limiter → hardware out.
+    master = params.details.get("master") or {}
+    drive = max(0.8, min(2.5, float(master.get("drive") or 1.2)))
+    makeup = max(0.5, min(1.5, float(master.get("makeup") or 0.95)))
+    # Soft energy-aware master: light drive + limiter (section energy baked into drive).
+    section_energy = params.details.get("section_energy") or []
+    if isinstance(section_energy, list) and section_energy:
+        peak_energy = max(float(item.get("energy") or 0.5) for item in section_energy)
+        drive = max(drive, 1.0 + peak_energy * 0.9)
+        makeup = max(makeup, 0.8 + peak_energy * 0.15)
     events.append(
         "\t[0.0, ['/d_recv', SynthDef(\\remixero_master, {"
-        f" |inBus={mix_bus}, out=0|\n"
+        f" |inBus={mix_bus}, out=0, drive={drive:.4f}, makeup={makeup:.4f}|\n"
         "\t\t\tvar sig = In.ar(inBus, 2);\n"
-        "\t\t\tOut.ar(out, Limiter.ar(sig, 0.95));\n"
+        "\t\t\tvar driven = (sig * drive).tanh;\n"
+        "\t\t\tvar widened = driven + DelayC.ar(driven, 0.03, 0.012) * 0.12;\n"
+        "\t\t\tOut.ar(out, Limiter.ar(widened * makeup, 0.95));\n"
         "\t}).asBytes]],"
     )
     events.append(
         f"\t[{time_offset:.6f}, [\\s_new, \\remixero_master, 900, 1, 0, "
-        f"\\inBus, {mix_bus}, \\out, 0]],"
+        f"\\inBus, {mix_bus}, \\out, 0, \\drive, {drive:.4f}, \\makeup, {makeup:.4f}]],"
     )
 
     node_id = 1000
@@ -637,6 +707,30 @@ def generate_layered_patch(
                 f"\\pitchRatio, {pitch_ratio:.6f}, \\pitchDispersion, {pitch_dispersion:.6f}, "
                 f"\\timeDispersion, {time_dispersion:.6f}, \\drive, {drive:.6f}, "
                 f"\\wet, {wet:.6f}, \\amp, {volume:.6f}, \\pan, {pan:.6f}, "
+                f"\\attack, {attack:.6f}, \\sustain, {sustain:.6f}, \\release, {release:.6f}]],"
+            )
+            node_id += 1
+        elif kind == "pump":
+            latest = max(latest, end)
+            pump_rate = max(1.0, min(8.0, float(details.get("pump_rate") or 2.0)))
+            depth = max(0.0, min(0.95, float(details.get("depth") or 0.7)))
+            pulse_width = max(
+                0.05, min(0.45, float(details.get("pulse_width") or 0.12))
+            )
+            transient_boost = max(
+                0.0, min(1.0, float(details.get("transient_boost") or 0.4))
+            )
+            drive = max(0.5, min(4.0, float(details.get("drive") or 1.5)))
+            rate = max(0.4, min(1.8, float(details.get("playback_rate") or 1.0)))
+            hpf = max(20.0, min(2000.0, float(details.get("hpf") or 60.0)))
+            lpf = max(200.0, min(18000.0, float(details.get("lpf") or 8000.0)))
+            events.append(
+                f"\t[{start:.6f}, [\\s_new, \\remixero_pump, {node_id}, 0, 0, "
+                f"\\out, {mix_bus}, \\buf, 0, \\rate, {rate:.6f}, "
+                f"\\pumpRate, {pump_rate:.6f}, \\depth, {depth:.6f}, "
+                f"\\pulseWidth, {pulse_width:.6f}, \\transientBoost, {transient_boost:.6f}, "
+                f"\\drive, {drive:.6f}, \\hpf, {hpf:.3f}, \\lpf, {lpf:.3f}, "
+                f"\\amp, {volume:.6f}, \\pan, {pan:.6f}, "
                 f"\\attack, {attack:.6f}, \\sustain, {sustain:.6f}, \\release, {release:.6f}]],"
             )
             node_id += 1
@@ -812,6 +906,15 @@ def _layered_synthdefs(*, channels: int, kinds: set[str], mix_bus: int) -> list[
             " |out=0, buf=0, rate=1, pitchRatio=1, pitchDispersion=0, timeDispersion=0, "
             "drive=1.5, wet=0.8, amp=0.7, pan=0, attack=0.02, sustain=1.0, release=0.05|\n"
             f"{_pitch_warp_synth_body(channels)}"
+            "\t}).asBytes]],"
+        )
+    if "pump" in kinds:
+        defs.append(
+            "\t[0.0, ['/d_recv', SynthDef(\\remixero_pump, {"
+            " |out=0, buf=0, rate=1, pumpRate=2, depth=0.7, pulseWidth=0.12, "
+            "transientBoost=0.4, drive=1.5, hpf=60, lpf=8000, "
+            "amp=0.7, pan=0, attack=0.02, sustain=1.0, release=0.05|\n"
+            f"{_pump_synth_body(channels)}"
             "\t}).asBytes]],"
         )
     if "passthrough" in kinds:

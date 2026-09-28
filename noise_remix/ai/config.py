@@ -100,6 +100,70 @@ def load_ai_config(
     )
 
 
+def gemini_api_key() -> str | None:
+    """Return the Gemini/Google API key from the environment, if set."""
+    key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    if key is None:
+        return None
+    key = key.strip()
+    return key or None
+
+
+def gemini_api_key_available() -> bool:
+    return gemini_api_key() is not None
+
+
+def load_gemini_listen_config(config_path: Path | None = None) -> AIConfig | None:
+    """Load a Gemini-provider config used only for the audio listening pass.
+
+    Returns None when no Gemini key is available (listen step should be skipped).
+    """
+    key = gemini_api_key()
+    if not key:
+        return None
+
+    data: dict = {}
+    path = config_path or Path("remixero.toml")
+    if path.is_file():
+        with path.open("rb") as handle:
+            parsed = tomllib.load(handle)
+        data = dict(parsed.get("ai") or {})
+
+    model = (
+        os.environ.get("REMIXERO_GEMINI_MODEL")
+        or data.get("gemini_model")
+        or data.get("model")
+        or DEFAULT_GEMINI_MODEL
+    )
+    max_retries = _env_int("REMIXERO_AI_MAX_RETRIES", data.get("max_retries"), 5)
+    if os.environ.get("REMIXERO_GEMINI_MAX_RETRIES"):
+        max_retries = _env_int("REMIXERO_GEMINI_MAX_RETRIES", None, max_retries)
+    retry_base = _env_float(
+        "REMIXERO_AI_RETRY_BASE",
+        data.get("retry_base_seconds"),
+        2.0,
+    )
+    if os.environ.get("REMIXERO_GEMINI_RETRY_BASE"):
+        retry_base = _env_float("REMIXERO_GEMINI_RETRY_BASE", None, retry_base)
+    retry_max = _env_float(
+        "REMIXERO_AI_RETRY_MAX",
+        data.get("retry_max_seconds"),
+        45.0,
+    )
+    if os.environ.get("REMIXERO_GEMINI_RETRY_MAX"):
+        retry_max = _env_float("REMIXERO_GEMINI_RETRY_MAX", None, retry_max)
+
+    return AIConfig(
+        enabled=True,
+        provider="gemini",
+        model=str(model),
+        api_key=key,
+        max_retries=max(0, max_retries),
+        retry_base_seconds=max(0.1, retry_base),
+        retry_max_seconds=max(0.1, retry_max),
+    )
+
+
 def require_api_key(config: AIConfig) -> str:
     if config.provider == "gemini":
         env_name = "GEMINI_API_KEY"

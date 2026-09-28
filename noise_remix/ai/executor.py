@@ -5,6 +5,7 @@ from __future__ import annotations
 import zlib
 from typing import Any
 
+from noise_remix.ai.automation import apply_automation_to_layer_spec, collect_automation
 from noise_remix.ai.registry import CAPABILITY_REGISTRY, executable_mode_for
 from noise_remix.ai.timing import (
     align_plan_to_analysis,
@@ -56,6 +57,7 @@ def plan_to_remix_parameters(
                 continue
             spec = _compile_layer(
                 layer=layer,
+                plan=plan,
                 analysis=analysis,
                 seed=_layer_seed(seed, layer.id, window_index),
                 start=start,
@@ -105,6 +107,17 @@ def plan_to_remix_parameters(
     if plan.transitions:
         crossfade = max((float(t.duration) for t in plan.transitions), default=0.0)
 
+    # Section energy curve for master bus drive/makeup.
+    section_energy = [
+        {
+            "start": section.start,
+            "end": section.end,
+            "energy": section.energy,
+            "name": section.name,
+        }
+        for section in plan.sections
+    ]
+
     return RemixParameters(
         mode="ai_plan",
         intensity=intensity,
@@ -127,6 +140,11 @@ def plan_to_remix_parameters(
                 {"name": section.name, "start": section.start, "end": section.end}
                 for section in plan.sections
             ],
+            "section_energy": section_energy,
+            "master": {
+                "drive": round(1.0 + overall * 0.8, 3),
+                "makeup": round(0.85 + (1.0 - preservation) * 0.2, 3),
+            },
         },
     )
 
@@ -139,6 +157,7 @@ def _layer_seed(seed: int, layer_id: str, window_index: int) -> int:
 def _compile_layer(
     *,
     layer: AudioLayer,
+    plan: ProductionPlan,
     analysis: AudioAnalysis,
     seed: int,
     start: float,
@@ -161,7 +180,6 @@ def _compile_layer(
     intensity = max(intensity, overall_intensity * 0.35)
     intensity = max(0.0, min(1.0, (intensity * 0.75) + ((1.0 - source_preservation) * 0.25)))
 
-    # Generate material for the gated span; fades extend beyond gate_end.
     window_dur = max(0.05, gate_end - start)
     mode = get_mode(mode_name)
     params = mode.generate(
@@ -217,7 +235,6 @@ def _compile_layer(
                 float(event.get("amp", 0.2)) * float(layer.volume) * gain, 6
             )
             shifted.append(event)
-        # Prefer musical onsets for hit-oriented engines.
         if layer.processor in {"stutter", "destroy", "random", "collapse"}:
             shifted = snap_events_to_transients(
                 shifted,
@@ -227,7 +244,9 @@ def _compile_layer(
                 strength=0.7 if layer.processor == "stutter" else 0.45,
             )
         spec["events"] = shifted
-    return spec
+
+    auto_events = collect_automation(plan, layer)
+    return apply_automation_to_layer_spec(spec, events=auto_events)
 
 
 def _kind_for(mode_name: str, details: dict[str, Any]) -> str:
@@ -237,10 +256,10 @@ def _kind_for(mode_name: str, details: dict[str, Any]) -> str:
         return "grains"
     if mode_name in {"destroy", "collapse", "random", "stutter"}:
         return "fragments"
-    if mode_name in {"feedback", "comb", "ring_mod", "pitch_warp"}:
+    if mode_name in {"feedback", "comb", "ring_mod", "pitch_warp", "pump"}:
         return mode_name
     engine = details.get("engine")
-    if engine in {"feedback", "comb", "ring_mod", "pitch_warp", "fragments"}:
+    if engine in {"feedback", "comb", "ring_mod", "pitch_warp", "pump", "fragments"}:
         return "fragments" if engine == "fragments" else str(engine)
     return mode_name
 
@@ -290,6 +309,9 @@ def _apply_overrides(
         "hpf",
         "feedback_amount",
         "hold_probability",
+        "pump_rate",
+        "pulse_width",
+        "transient_boost",
     )
     for key in continuous_keys:
         if key not in overrides:

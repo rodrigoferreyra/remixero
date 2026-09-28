@@ -72,6 +72,7 @@ def apply_brief_intent(plan: ProductionPlan, instruction: str) -> ProductionPlan
         _ensure_layer(plan, "pulse", "stutter", intensity=0.9, start_ratio=0.15)
         _ensure_layer(plan, "crush", "destroy", intensity=0.92, start_ratio=0.35)
         _ensure_layer(plan, "riser", "pitch_warp", intensity=0.85, start_ratio=0.0)
+        _ensure_layer(plan, "pump", "pump", intensity=0.9, start_ratio=0.2)
         if "feedback" not in processors and "comb" not in processors:
             _ensure_layer(plan, "pressure", "feedback", intensity=0.82, start_ratio=0.45)
         _ensure_peak_section_uses_aggressive_layers(plan)
@@ -155,7 +156,8 @@ def _ensure_peak_section_uses_aggressive_layers(plan: ProductionPlan) -> None:
     aggressive = [
         layer.id
         for layer in plan.layers
-        if layer.processor in {"destroy", "stutter", "feedback", "ring_mod", "collapse"}
+        if layer.processor
+        in {"destroy", "stutter", "feedback", "ring_mod", "collapse", "pump"}
     ]
     if not aggressive:
         return

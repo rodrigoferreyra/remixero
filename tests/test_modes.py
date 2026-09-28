@@ -25,6 +25,7 @@ def test_available_modes_include_mvp_set() -> None:
         "ring_mod",
         "pitch_warp",
         "stutter",
+        "pump",
     } <= modes
 
 
@@ -102,6 +103,7 @@ def test_new_continuous_modes_generate_patches() -> None:
         ("comb", "CombC.ar"),
         ("ring_mod", "SinOsc.ar"),
         ("pitch_warp", "PitchShift.ar"),
+        ("pump", "LFPulse.kr"),
     ):
         params = get_mode(mode_name).generate(
             analysis=analysis, intensity=0.7, seed=7, duration=0.5

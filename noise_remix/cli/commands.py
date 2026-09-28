@@ -82,6 +82,11 @@ def main(
         "--duration",
         help="Max source/render duration in seconds (default: full source; smoke caps at 5s).",
     ),
+    preview: Optional[float] = typer.Option(
+        None,
+        "--preview",
+        help="Fast preview: analyze/render only the first N seconds (e.g. --preview 15).",
+    ),
     keep_patch: bool = typer.Option(
         False,
         "--keep-patch",
@@ -119,6 +124,14 @@ def main(
         "--keep-plan",
         help="Write the validated AI production plan JSON next to outputs.",
     ),
+    hybrid_listen: bool = typer.Option(
+        False,
+        "--hybrid-listen",
+        help=(
+            "With --provider groq: run a Gemini audio-listen pass first "
+            "(requires GEMINI_API_KEY), then plan with Groq."
+        ),
+    ),
     plan_only: bool = typer.Option(
         False,
         "--plan-only",
@@ -148,6 +161,7 @@ def main(
             seed_value=seed,
             output_dir=output,
             duration=duration,
+            preview=preview,
             keep_patch=keep_patch,
             keep_analysis=keep_analysis,
             ai=ai or prompt is not None or plan_only,
@@ -155,6 +169,7 @@ def main(
             prompt=prompt,
             yes=yes,
             keep_plan=keep_plan,
+            hybrid_listen=hybrid_listen,
             plan_only=plan_only,
             verbose=verbose,
         )
@@ -175,6 +190,7 @@ def _run(
     seed_value: str,
     output_dir: Path,
     duration: float | None,
+    preview: float | None,
     keep_patch: bool,
     keep_analysis: bool,
     ai: bool,
@@ -182,11 +198,17 @@ def _run(
     prompt: str | None,
     yes: bool,
     keep_plan: bool,
+    hybrid_listen: bool,
     plan_only: bool,
     verbose: bool,
 ) -> None:
     if variations < 1:
         raise InputError("--variations must be >= 1.")
+    if preview is not None and preview <= 0:
+        raise InputError("--preview must be greater than 0.")
+    # Preview is a convenience cap on duration.
+    if preview is not None:
+        duration = preview if duration is None else min(duration, preview)
 
     if ai:
         _run_ai(
@@ -196,12 +218,14 @@ def _run(
             seed_value=seed_value,
             output_dir=output_dir,
             duration=duration,
+            preview=preview,
             keep_patch=keep_patch,
             keep_analysis=keep_analysis,
             provider=provider,
             prompt=prompt,
             yes=yes,
             keep_plan=keep_plan,
+            hybrid_listen=hybrid_listen,
             plan_only=plan_only,
             verbose=verbose,
         )
@@ -245,6 +269,10 @@ def _run(
     analysis_duration = _resolve_analysis_duration(
         probe.duration, duration, mode=mode_name
     )
+    if preview is not None:
+        display.print_step(
+            f"Preview mode — using first {analysis_duration:.1f}s of source"
+        )
 
     outputs: list[Path] = []
     seeds: list[int] = []
@@ -329,12 +357,14 @@ def _run_ai(
     seed_value: str,
     output_dir: Path,
     duration: float | None,
+    preview: float | None,
     keep_patch: bool,
     keep_analysis: bool,
     provider: str | None,
     prompt: str | None,
     yes: bool,
     keep_plan: bool,
+    hybrid_listen: bool,
     plan_only: bool,
     verbose: bool,
 ) -> None:
@@ -364,10 +394,22 @@ def _run_ai(
         display.print_environment(env)
     display.print_step(f"AI provider={ai_config.provider} model={ai_config.model}")
     if ai_config.provider == "groq":
-        display.print_step(
-            "Groq uses local analysis only (no source-audio upload)",
-            ok=True,
-        )
+        from noise_remix.ai.config import gemini_api_key_available
+
+        if hybrid_listen and gemini_api_key_available():
+            display.print_step(
+                "Hybrid listen on: Gemini will listen; Groq will build the plan"
+            )
+        elif hybrid_listen and not gemini_api_key_available():
+            display.print_step(
+                "Hybrid listen requested but no GEMINI_API_KEY — using analysis only",
+                ok=False,
+            )
+        else:
+            display.print_step(
+                "Groq uses local analysis only (pass --hybrid-listen for Gemini listen)",
+                ok=True,
+            )
 
     probe = validate_input(input_file)
     display.print_step("Input validated")
@@ -377,6 +419,10 @@ def _run_ai(
     analysis_duration = _resolve_analysis_duration(
         probe.duration, duration, mode="granular"
     )
+    if preview is not None:
+        display.print_step(
+            f"Preview mode — using first {analysis_duration:.1f}s of source"
+        )
 
     outputs: list[Path] = []
     seeds: list[int] = []
@@ -423,6 +469,8 @@ def _run_ai(
                 config=ai_config,
                 variation_index=variation_index,
                 variations=variations,
+                hybrid_listen=hybrid_listen,
+                status=lambda message: display.print_step(message, ok=False),
             )
             if intensity is not None:
                 plan.global_parameters.overall_intensity = intensity

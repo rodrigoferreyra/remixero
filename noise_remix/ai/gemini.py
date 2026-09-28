@@ -27,6 +27,7 @@ def generate_production_plan(
     variation_index: int = 0,
     variations: int = 1,
     upload_audio: bool = True,
+    listening_brief: object | None = None,
 ) -> ProductionPlan:
     """Ask Gemini for a structured ProductionPlan and validate it."""
     api_key = require_api_key(config)
@@ -49,6 +50,7 @@ def generate_production_plan(
         duration_seconds=duration_seconds,
         variation_index=variation_index,
         variations=variations,
+        listening_brief=listening_brief,
     )
 
     base_contents: list = [prompt]
