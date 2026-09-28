@@ -78,7 +78,7 @@ The AI creative director turns a natural-language instruction into a structured 
 6. The executor compiles layers into concurrent synthesis voices on a shared mix bus with limiting.
 7. SuperCollider renders the output WAV.
 
-Abstract briefs such as *make it hardcore edm* are accepted and expanded into sections and layers, but they often produce generic plans. Stronger results come from prompts that name **song moments**, **what to preserve**, **what to destroy**, and an **energy arc** — not genre labels alone. Analysis-driven arrangement hints (build / drop / breakdown) still help short briefs, but concrete creative constraints steer the plan more reliably.
+Abstract briefs such as *make it hardcore edm* are accepted and expanded into sections and layers, but they often produce generic plans. Without audio listen, the plan provider only sees local analysis (duration, segments, transients, spectral labels) — not labeled choruses, vocals, or hooks. Stronger analysis-only prompts describe **energy arcs**, **section contrast**, **processor families**, and **source preservation**, optionally with **times in seconds**. Song-specific language (chorus, vocal hook) becomes useful when **`--hybrid-listen`** or a multimodal plan provider has actually heard the source.
 
 AI providers design plans only. They do not write SuperCollider. If a plan requests unsupported processors, Remixero validates the plan before render and keeps only executable layers.
 
@@ -219,13 +219,13 @@ Use **`--preview`** while exploring modes. It limits analysis and render to the 
 ## Render with the AI creative director
 
 1. Export your plan-provider key.
-2. Run Remixero with a prompt that names structure and material, not only a genre. **`--prompt`** implies AI mode:
+2. Run Remixero with a prompt that specifies transform behavior, not only a genre label. **`--prompt`** implies AI mode:
 
 ```bash
 export GROQ_API_KEY="your-key"
 remixero song.mp3 \
   --provider groq \
-  --prompt "Make the chorus hit like hardcore EDM — keep the vocal hook readable, crush pads and wash into distortion, add sidechain pump and stutter on the drop" \
+  --prompt "Sparse low-intensity open, mid section builds with stutter and pitch_warp, final third full destroy+pump+feedback wall; overall source preservation low after the midpoint" \
   --preview 20 \
   --yes \
   --keep-plan
@@ -237,28 +237,36 @@ remixero song.mp3 \
 
 ### Write stronger prompts
 
-Remixero expands abstract genre briefs, but short vibe-only prompts often yield timid or uniform plans. Prefer instructions that do all of the following:
+By default (Groq without **`--hybrid-listen`**), the planner does **not** hear the track. It only receives local analysis and your text. Asking it to target “the chorus” or “keep the vocal hook” without a listening pass does not give it those landmarks.
 
-1. **Point at a song moment** — chorus, drop, intro, breakdown, outro, or approximate times.
-2. **Say what stays recognizable** — vocal hook, kick pulse, lyric, riff.
-3. **Say what gets destroyed** — pads, wash, stereo bed, everything except the hook.
-4. **Describe an energy arc** — sparse → violent, build → crush → silence, industrial then feedback wall.
-5. **Name processor families when you care** — *pump*, *stutter*, *feedback*, *destroy*, *pitch_warp*, *comb* — so the plan stays inside the registry with intent.
+**Without listen**, prefer prompts that use what analysis can support:
 
-Examples that tend to plan better than a genre label alone:
+1. **Energy arc and contrast** — sparse → dense, quiet bed → crush, long build then abrupt cut.
+2. **Relative placement** — early / middle / late, or approximate times in seconds if you know them.
+3. **Processor families** — *pump*, *stutter*, *feedback*, *destroy*, *pitch_warp*, *comb*, *ring_mod*.
+4. **Source preservation** — how recognizable the source should stay in peak sections (`high` / `low`, or a numeric intent the model can map).
+5. **Layer roles** — bed vs pulse vs pressure, not song form labels the model cannot verify.
+
+Examples that work without audio listen:
 
 ```bash
-# Structure + preserve/destroy
---prompt "Sparse industrial intro, then at the chorus crush everything except the vocal into a feedback wall; keep the vocal readable"
+# Energy arc + processors + preservation
+--prompt "Sparse granular bed for the first third, then stutter pulses, then destroy+pump+feedback at high intensity; low source preservation in the last third"
 
-# Energy arc without inventing unsupported FX
---prompt "Glitchy stutter verse, metallic comb/ring-mod bridge, full destroy+pump drop; low source preservation on the drop"
+# Time-based if you already know the map
+--prompt "0–8s almost dry/passthrough accents only; 8–20s comb+ring_mod metallic tension; after 20s full collapse with feedback under 0.8"
 
-# Song-moment focus (works especially well with --hybrid-listen)
---prompt "Make this chorus hardcore — keep the vocal hook, sidechain-pump the bed, stutter the snare hits"
+# Genre as seasoning, not the whole brief
+--prompt "Hardcore pressure: pump and stutter throughout, pitch_warp risers into each section change, destroy on peaks; avoid a static single-effect stack"
 ```
 
-Weaker starting point (accepted, but often generic):
+**With listen** (`--hybrid-listen`, or `--provider gemini` with audio upload), the planner can use song-aware notes. Then musical landmarks make sense:
+
+```bash
+--prompt "Make the chorus hit hardcore — keep the vocal hook readable, crush pads into distortion, sidechain-pump the bed, stutter on the drop"
+```
+
+Weaker starting point (accepted, but often generic either way):
 
 ```bash
 --prompt "make it hardcore edm"
@@ -269,14 +277,14 @@ Weaker starting point (accepted, but often generic):
 1. Use **`--preview 15`** or **`--preview 20`** while shaping the brief.
 2. Use **`--keep-plan`** and read the plan JSON when the render misses the mark.
 3. Raise force with **`--intensity 0.85`**–`0.95` if the plan looks timid after validation.
-4. Add **`--hybrid-listen`** when the brief depends on a real chorus, vocal entry, or other song-specific moment and a multimodal key is available.
+4. Add **`--hybrid-listen`** only when you need real song moments (chorus, vocal entry) and a multimodal key is available.
 
 To generate a plan without rendering:
 
 ```bash
 remixero song.mp3 \
   --provider groq \
-  --prompt "Sparse industrial intro, then violent feedback wall; keep the kick pulse" \
+  --prompt "Sparse open, then violent feedback wall; low source preservation after the midpoint" \
   --plan-only \
   --keep-plan
 ```
