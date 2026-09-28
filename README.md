@@ -78,7 +78,7 @@ The AI creative director turns a natural-language instruction into a structured 
 6. The executor compiles layers into concurrent synthesis voices on a shared mix bus with limiting.
 7. SuperCollider renders the output WAV.
 
-Abstract briefs are valid. An instruction such as *make it hardcore edm* is expanded into sections, layers, and registry processors. Short or abstract briefs can also receive analysis-driven arrangement hints (build, drop, breakdown layout).
+Abstract briefs such as *make it hardcore edm* are accepted and expanded into sections and layers, but they often produce generic plans. Stronger results come from prompts that name **song moments**, **what to preserve**, **what to destroy**, and an **energy arc** — not genre labels alone. Analysis-driven arrangement hints (build / drop / breakdown) still help short briefs, but concrete creative constraints steer the plan more reliably.
 
 AI providers design plans only. They do not write SuperCollider. If a plan requests unsupported processors, Remixero validates the plan before render and keeps only executable layers.
 
@@ -219,33 +219,69 @@ Use **`--preview`** while exploring modes. It limits analysis and render to the 
 ## Render with the AI creative director
 
 1. Export your plan-provider key.
-2. Run Remixero with a prompt. **`--prompt`** implies AI mode:
+2. Run Remixero with a prompt that names structure and material, not only a genre. **`--prompt`** implies AI mode:
 
 ```bash
 export GROQ_API_KEY="your-key"
 remixero song.mp3 \
   --provider groq \
-  --prompt "make it hardcore edm" \
-  --preview 15 \
+  --prompt "Make the chorus hit like hardcore EDM — keep the vocal hook readable, crush pads and wash into distortion, add sidechain pump and stutter on the drop" \
+  --preview 20 \
   --yes \
   --keep-plan
 ```
 
-3. Review the printed production plan summary.
+3. Review the printed production plan summary. Check that sections, layers, and processors match the intention before you keep iterating.
 4. If you did not pass **`--yes`**, confirm when asked before rendering.
 5. Open the output directory for the WAV, metadata, and optional plan JSON.
+
+### Write stronger prompts
+
+Remixero expands abstract genre briefs, but short vibe-only prompts often yield timid or uniform plans. Prefer instructions that do all of the following:
+
+1. **Point at a song moment** — chorus, drop, intro, breakdown, outro, or approximate times.
+2. **Say what stays recognizable** — vocal hook, kick pulse, lyric, riff.
+3. **Say what gets destroyed** — pads, wash, stereo bed, everything except the hook.
+4. **Describe an energy arc** — sparse → violent, build → crush → silence, industrial then feedback wall.
+5. **Name processor families when you care** — *pump*, *stutter*, *feedback*, *destroy*, *pitch_warp*, *comb* — so the plan stays inside the registry with intent.
+
+Examples that tend to plan better than a genre label alone:
+
+```bash
+# Structure + preserve/destroy
+--prompt "Sparse industrial intro, then at the chorus crush everything except the vocal into a feedback wall; keep the vocal readable"
+
+# Energy arc without inventing unsupported FX
+--prompt "Glitchy stutter verse, metallic comb/ring-mod bridge, full destroy+pump drop; low source preservation on the drop"
+
+# Song-moment focus (works especially well with --hybrid-listen)
+--prompt "Make this chorus hardcore — keep the vocal hook, sidechain-pump the bed, stutter the snare hits"
+```
+
+Weaker starting point (accepted, but often generic):
+
+```bash
+--prompt "make it hardcore edm"
+```
+
+### Iterate quickly
+
+1. Use **`--preview 15`** or **`--preview 20`** while shaping the brief.
+2. Use **`--keep-plan`** and read the plan JSON when the render misses the mark.
+3. Raise force with **`--intensity 0.85`**–`0.95` if the plan looks timid after validation.
+4. Add **`--hybrid-listen`** when the brief depends on a real chorus, vocal entry, or other song-specific moment and a multimodal key is available.
 
 To generate a plan without rendering:
 
 ```bash
 remixero song.mp3 \
   --provider groq \
-  --prompt "sparse then violent" \
+  --prompt "Sparse industrial intro, then violent feedback wall; keep the kick pulse" \
   --plan-only \
   --keep-plan
 ```
 
-Pass **`--provider groq`** or **`--provider gemini`** to force a backend, or omit **`--provider`** to auto-select from available keys. Add **`--intensity`** when you want a fixed overall intensity after planning.
+Pass **`--provider groq`** or **`--provider gemini`** to force a backend, or omit **`--provider`** to auto-select from available keys.
 
 ## Use hybrid listen
 
