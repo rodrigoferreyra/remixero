@@ -1,0 +1,74 @@
+---
+description: Core architecture and implementation constraints for Remixero
+alwaysApply: true
+---
+
+# Architecture
+
+Remixero is a local, CLI-first procedural audio transformation tool.
+
+## Core pipeline
+
+Keep these stages separate:
+
+Input
+→ analysis
+→ remix configuration
+→ remix strategy
+→ SuperCollider generation
+→ rendering
+→ output/metadata
+
+Do not collapse these responsibilities into a single module.
+
+## Boundaries
+
+- CLI code handles arguments, interaction, and presentation.
+- Audio analysis handles analysis only.
+- Segmentation handles identifying source regions.
+- Remix strategies produce structured transformation parameters.
+- SuperCollider integration generates and executes SuperCollider code.
+- Output management handles files and metadata.
+- Configuration is separate from runtime logic.
+
+## Remix strategies
+
+Each remix mode must be independently implementable.
+
+Adding a remix mode should not require modifying the core rendering pipeline.
+
+Prefer explicit interfaces and small modules over elaborate abstractions.
+
+## Determinism
+
+Any randomness must come from an explicit seeded random generator.
+
+Never use uncontrolled global randomness in remix generation.
+
+Record the seed in output metadata.
+
+## Source preservation
+
+Never modify the user's original audio file.
+
+Never silently overwrite an existing generated output.
+
+## AI
+
+AI is not part of the core audio-generation pipeline.
+
+Do not introduce an LLM dependency unless explicitly requested.
+
+## External dependencies
+
+Do not guess APIs, CLI arguments, or behavior for SuperCollider, FFmpeg, or third-party libraries.
+
+Verify external behavior against current official documentation or the installed environment.
+
+## Implementation style
+
+Prefer boring, explicit, testable code.
+
+Do not prematurely optimize.
+
+Do not introduce abstractions until there is a concrete need for them.

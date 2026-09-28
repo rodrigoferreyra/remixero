@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "remixero"
+version = "0.1.0"
+description = "CLI-first procedural noise remix tool powered by SuperCollider"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Remixero" }]
+dependencies = [
+  "typer>=0.12",
+  "rich>=13",
+  "pydantic>=2",
+  "numpy>=2",
+  "soundfile>=0.12",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+ai = ["google-genai>=1.0", "groq>=0.11"]
+
+[project.scripts]
+remixero = "noise_remix.main:app"
+
+[tool.setuptools.packages.find]
+include = ["noise_remix*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+  "integration: tests that require SuperCollider and FFmpeg",
+]

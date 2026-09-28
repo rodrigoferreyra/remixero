@@ -1,0 +1,57 @@
+---
+description: Rules for audio analysis, DSP, randomness, and signal safety
+alwaysApply: true
+---
+
+# Audio and DSP
+
+This project is experimental/noise music software, but its audio processing must remain technically controlled and reproducible.
+
+## Audio representation
+
+- Do not repeatedly convert between audio representations unnecessarily.
+- Make sample rate, channel count, sample format, and duration explicit.
+- Never assume the input is 44.1 kHz, stereo, or normalized.
+- Preserve source information needed for reproducibility.
+
+## Analysis
+
+Analysis must not modify the original source.
+
+Analysis results should be represented as structured data rather than loosely formatted strings.
+
+Do not treat estimated BPM or other heuristic measurements as authoritative.
+
+## Randomness
+
+All procedural randomness must use an explicit RNG/seed.
+
+The same seed and configuration should produce the same transformation parameters.
+
+Do not use timestamps, process IDs, or implicit global RNG state as hidden sources of randomness.
+
+## Intensity
+
+Intensity is a transformation parameter, not a volume control.
+
+Do not implement intensity by simply multiplying the final signal amplitude.
+
+Map intensity explicitly to transformation parameters.
+
+## Levels and feedback
+
+Noise and distortion are intentional.
+
+Uncontrolled signal levels are not.
+
+Feedback systems must have bounded parameters.
+
+Where appropriate, use limiting or other protection against runaway output levels.
+
+Do not remove distortion merely because the resulting signal is intentionally harsh.
+
+## Source material
+
+The source should be treated as material to transform, not as something that must remain musically intact.
+
+Do not add conventional musical structure unless the selected remix mode explicitly calls for it.

@@ -1,0 +1,61 @@
+---
+description: Testing requirements for Remixero
+alwaysApply: true
+---
+
+# Testing
+
+Every new core behavior should have a corresponding test.
+
+## Unit tests
+
+Test independently:
+
+- CLI validation
+- configuration
+- seed handling
+- source hashing
+- segmentation
+- intensity mapping
+- remix parameter generation
+- output naming
+- metadata generation
+
+## Integration tests
+
+Maintain at least one short audio fixture for integration testing.
+
+The end-to-end pipeline should test:
+
+input
+→ analysis
+→ remix configuration
+→ SuperCollider generation
+→ rendering
+→ output validation
+→ metadata
+
+Integration tests should use short audio to remain fast.
+
+## Determinism
+
+For deterministic functionality, test that the same:
+
+- source
+- mode
+- parameters
+- seed
+
+produce the same generated configuration.
+
+Do not compare floating-point audio samples byte-for-byte unless the rendering environment guarantees that level of determinism.
+
+## External tools
+
+Tests that require SuperCollider or FFmpeg should clearly distinguish environment-dependent integration tests from pure unit tests.
+
+Do not mock away the entire SuperCollider integration and then consider the renderer tested.
+
+## Regression tests
+
+When a bug is fixed, add a regression test when practical.

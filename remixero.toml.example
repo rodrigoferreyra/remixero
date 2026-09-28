@@ -1,0 +1,19 @@
+# Optional Remixero project configuration
+# API keys must NOT be stored here — use environment variables:
+#   GEMINI_API_KEY / GROQ_API_KEY
+
+[defaults]
+# mode = "granular"
+# intensity = 0.5
+# variations = 1
+# output = "./output"
+
+[ai]
+enabled = false
+# provider: "gemini" | "groq" (or omit and let Remixero auto-pick from available keys)
+provider = "groq"
+gemini_model = "gemini-3.8-flash"
+groq_model = "openai/gpt-oss-20b"
+max_retries = 5
+retry_base_seconds = 2.0
+retry_max_seconds = 45.0

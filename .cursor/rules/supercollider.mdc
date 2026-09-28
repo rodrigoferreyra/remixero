@@ -1,0 +1,62 @@
+---
+description: SuperCollider integration and generated patch rules
+alwaysApply: true
+---
+
+# SuperCollider
+
+SuperCollider is the rendering and synthesis engine.
+
+## Verification
+
+Never invent SuperCollider syntax, command-line arguments, server behavior, or rendering workflows.
+
+Before implementing integration:
+
+1. Inspect the installed SuperCollider version when available.
+2. Consult current official SuperCollider documentation when necessary.
+3. Verify commands with a minimal test.
+
+## Generated code
+
+Generated `.scd` files should be:
+
+- valid SuperCollider code
+- readable
+- deterministic when given the same parameters and seed
+- inspectable by a human
+- independent of Python implementation details where practical
+
+Do not generate opaque one-line SuperCollider programs.
+
+## Rendering
+
+The Python application owns orchestration.
+
+SuperCollider owns audio synthesis/rendering.
+
+Do not move application logic into generated SuperCollider code unnecessarily.
+
+The Python layer should provide structured parameters to the SuperCollider layer.
+
+## Failure handling
+
+Never report a successful render until:
+
+1. SuperCollider exits successfully.
+2. The expected output exists.
+3. The output can be inspected as a valid audio file.
+
+Capture useful SuperCollider errors and surface them to the user.
+
+## Feedback
+
+Feedback-based patches must have bounded feedback parameters.
+
+Never create an uncontrolled positive-feedback loop simply because the project is intended to generate noise.
+
+## Inspectability
+
+When `--keep-patch` is enabled, preserve the exact `.scd` file used for rendering.
+
+Do not regenerate a different patch during metadata generation.
