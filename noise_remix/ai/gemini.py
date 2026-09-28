@@ -113,6 +113,7 @@ def generate_production_plan(
             analysis=analysis,
             duration_seconds=duration_seconds,
             provider_label="Gemini",
+            instruction=instruction,
         )
     finally:
         if uploaded is not None:

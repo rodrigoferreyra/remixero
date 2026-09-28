@@ -427,6 +427,11 @@ def _run_ai(
             if intensity is not None:
                 plan.global_parameters.overall_intensity = intensity
 
+            from noise_remix.ai.timing import align_plan_to_analysis
+
+            # Snap sections to musical grid and attach crossfades before preview/save.
+            plan = align_plan_to_analysis(plan, analysis)
+
             display.print_production_plan(plan, instruction=instruction)
 
             if keep_plan or plan_only:

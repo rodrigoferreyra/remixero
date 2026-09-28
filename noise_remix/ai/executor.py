@@ -6,6 +6,12 @@ import zlib
 from typing import Any
 
 from noise_remix.ai.registry import CAPABILITY_REGISTRY, executable_mode_for
+from noise_remix.ai.timing import (
+    align_plan_to_analysis,
+    envelope_gain_at,
+    layer_windows_with_crossfades,
+    snap_events_to_transients,
+)
 from noise_remix.errors import ProductionPlanError
 from noise_remix.models.analysis import AudioAnalysis
 from noise_remix.models.configuration import RemixParameters
@@ -28,34 +34,24 @@ def plan_to_remix_parameters(
 ) -> RemixParameters:
     """Compile a production plan into layered remix parameters for SuperCollider.
 
-    Each plan layer becomes an independent engine voice (grains, fragments,
-    feedback, comb, ring-mod, pitch-warp, stutter, or passthrough). Section
-    ``active_layers`` gating and explicit ``processing_chain`` overrides are honored.
+    Section boundaries are snapped to analysis transients/segments. Layer windows
+    include crossfade tails so section changes overlap instead of hard-cutting.
     """
+    plan = align_plan_to_analysis(plan, analysis)
     duration = min(plan.duration_seconds, analysis.duration)
     if duration <= 0:
         raise ProductionPlanError("Plan duration must be positive.")
 
     preservation = plan.global_parameters.source_preservation
     overall = plan.global_parameters.overall_intensity
-
-    # Build per-layer active windows from sections when active_layers is used.
-    active_windows = _section_active_windows(plan, duration)
+    windows_by_layer = layer_windows_with_crossfades(plan, duration=duration)
 
     compiled: list[dict[str, Any]] = []
-    for index, layer in enumerate(plan.layers):
-        windows = active_windows.get(layer.id)
-        if windows is not None and not windows:
-            # Explicitly never active in any section — skip.
-            continue
-        if windows is None:
-            windows = [(layer.start, layer.end if layer.end is not None else duration)]
-
-        for window_index, (win_start, win_end) in enumerate(windows):
-            # Intersect with the layer's own start/end.
-            layer_end = layer.end if layer.end is not None else duration
-            start = max(win_start, layer.start)
-            end = min(win_end, layer_end, duration)
+    for layer in plan.layers:
+        windows = windows_by_layer.get(layer.id) or []
+        for window_index, window in enumerate(windows):
+            start = float(window["start"])
+            end = float(window["end"])
             if end - start < 0.02:
                 continue
             spec = _compile_layer(
@@ -64,13 +60,15 @@ def plan_to_remix_parameters(
                 seed=_layer_seed(seed, layer.id, window_index),
                 start=start,
                 end=end,
+                fade_in=float(window["fade_in"]),
+                fade_out=float(window["fade_out"]),
+                gate_end=float(window.get("gate_end", end)),
                 overall_intensity=overall,
                 source_preservation=preservation,
             )
             compiled.append(spec)
 
     if not compiled:
-        # Fallback: render primary mode alone so AI never produces silence.
         primary = plan.global_parameters.primary_mode
         try:
             mode_name = executable_mode_for(primary)
@@ -93,7 +91,6 @@ def plan_to_remix_parameters(
         }
         return params
 
-    # Normalize volumes so stacked layers do not explode.
     n_layers = len(compiled)
     mix_scale = 1.0 / max(1.0, n_layers**0.5)
     for spec in compiled:
@@ -104,6 +101,9 @@ def plan_to_remix_parameters(
         default=overall,
     )
     intensity = max(0.0, min(1.0, intensity))
+    crossfade = 0.0
+    if plan.transitions:
+        crossfade = max((float(t.duration) for t in plan.transitions), default=0.0)
 
     return RemixParameters(
         mode="ai_plan",
@@ -122,6 +122,11 @@ def plan_to_remix_parameters(
             "ai_render": "layered",
             "source_preservation": preservation,
             "mix_scale": mix_scale,
+            "crossfade_seconds": crossfade,
+            "section_bounds": [
+                {"name": section.name, "start": section.start, "end": section.end}
+                for section in plan.sections
+            ],
         },
     )
 
@@ -131,30 +136,6 @@ def _layer_seed(seed: int, layer_id: str, window_index: int) -> int:
     return int(seed) ^ int(digest)
 
 
-def _section_active_windows(
-    plan: ProductionPlan,
-    duration: float,
-) -> dict[str, list[tuple[float, float]] | None]:
-    """Return active time windows per layer id.
-
-    If no section lists ``active_layers``, returns empty dict (caller uses layer spans).
-    If some sections use ``active_layers``, layers omitted from all sections get [].
-    """
-    any_gating = any(section.active_layers for section in plan.sections)
-    if not any_gating:
-        return {}
-
-    windows: dict[str, list[tuple[float, float]]] = {layer.id: [] for layer in plan.layers}
-    for section in plan.sections:
-        if not section.active_layers:
-            # Under gated plans, empty means nothing plays in this section.
-            continue
-        for layer_id in section.active_layers:
-            if layer_id in windows:
-                windows[layer_id].append((section.start, min(section.end, duration)))
-    return windows
-
-
 def _compile_layer(
     *,
     layer: AudioLayer,
@@ -162,6 +143,9 @@ def _compile_layer(
     seed: int,
     start: float,
     end: float,
+    fade_in: float,
+    fade_out: float,
+    gate_end: float,
     overall_intensity: float,
     source_preservation: float,
 ) -> dict[str, Any]:
@@ -177,7 +161,8 @@ def _compile_layer(
     intensity = max(intensity, overall_intensity * 0.35)
     intensity = max(0.0, min(1.0, (intensity * 0.75) + ((1.0 - source_preservation) * 0.25)))
 
-    window_dur = max(0.05, end - start)
+    # Generate material for the gated span; fades extend beyond gate_end.
+    window_dur = max(0.05, gate_end - start)
     mode = get_mode(mode_name)
     params = mode.generate(
         analysis=analysis,
@@ -198,6 +183,8 @@ def _compile_layer(
         "pan": float(layer.pan),
         "start": round(start, 6),
         "end": round(end, 6),
+        "fade_in": round(fade_in, 6),
+        "fade_out": round(fade_out, 6),
         "details": params.details,
     }
 
@@ -213,13 +200,32 @@ def _compile_layer(
                 continue
             event = dict(item)
             event["onset"] = round(onset, 6)
-            # Bias pan toward layer pan.
             event["pan"] = round(
                 max(-1.0, min(1.0, float(event.get("pan", 0.0)) * 0.5 + layer.pan * 0.5)),
                 6,
             )
-            event["amp"] = round(float(event.get("amp", 0.2)) * float(layer.volume), 6)
+            gain = envelope_gain_at(
+                time=onset,
+                start=start,
+                end=end,
+                fade_in=fade_in,
+                fade_out=fade_out,
+            )
+            if gain <= 0.02:
+                continue
+            event["amp"] = round(
+                float(event.get("amp", 0.2)) * float(layer.volume) * gain, 6
+            )
             shifted.append(event)
+        # Prefer musical onsets for hit-oriented engines.
+        if layer.processor in {"stutter", "destroy", "random", "collapse"}:
+            shifted = snap_events_to_transients(
+                shifted,
+                analysis=analysis,
+                window_start=start,
+                window_end=end,
+                strength=0.7 if layer.processor == "stutter" else 0.45,
+            )
         spec["events"] = shifted
     return spec
 
@@ -242,7 +248,6 @@ def _kind_for(mode_name: str, details: dict[str, Any]) -> str:
 def _collect_overrides(layer: AudioLayer) -> dict[str, float | int | bool | str]:
     overrides: dict[str, float | int | bool | str] = {}
     for step in layer.processing_chain:
-        # Later steps win; prefer steps matching the layer processor.
         step_params = step.parameters_as_dict()
         if step.processor == layer.processor:
             overrides.update(step_params)

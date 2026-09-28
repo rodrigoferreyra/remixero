@@ -32,7 +32,13 @@ The AI designs a structured multi-layer production plan (not SuperCollider code)
 Remixero compiles every layer into concurrent SuperCollider voices (grains, fragments,
 feedback, comb, ring-mod, pitch-warp, stutter, passthrough) with a shared mix bus and limiter.
 
+Abstract briefs are fine — e.g. `--prompt "make it hardcore edm"`. The model expands genre/mood
+into sections, layers, and registry processors. More specific briefs still give tighter control.
+
 ```bash
+# Abstract
+remixero song.mp3 --provider groq --prompt "make it hardcore edm" --yes --keep-plan
+
 # Groq (good when Gemini is overloaded)
 remixero song.mp3 --provider groq --prompt "industrial noise then feedback wall" --yes --keep-plan
 

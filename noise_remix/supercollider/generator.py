@@ -527,9 +527,13 @@ def generate_layered_patch(
         details = layer.get("details") or {}
         if not isinstance(details, dict):
             details = {}
-        sustain = max(0.05, end - start - 0.07)
-        attack = 0.02
-        release = 0.05
+        fade_in = max(0.05, float(layer.get("fade_in") or 0.35))
+        fade_out = max(0.05, float(layer.get("fade_out") or 0.35))
+        total = max(0.08, end - start)
+        # Env.linen(attack, sustain, release) must fit the play window.
+        attack = min(fade_in, total * 0.45)
+        release = min(fade_out, total * 0.45)
+        sustain = max(0.02, total - attack - release)
 
         if kind == "grains":
             grain_events = layer.get("events") or details.get("grains") or []

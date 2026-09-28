@@ -178,9 +178,10 @@ def test_executor_builds_layered_render() -> None:
     kinds = {layer["kind"] for layer in layers}
     assert "grains" in kinds
     assert "fragments" in kinds
-    # Section gating: crush only in second section (starts ~0.4).
+    # Section gating: crush only in second section (around mid track).
     crush = next(layer for layer in layers if layer["id"] == "crush")
-    assert crush["start"] >= 0.39
+    assert crush["start"] >= 0.2
+    assert float(crush.get("fade_out") or 0) > 0
 
     sc_text = generate_patch(
         params=params,
@@ -273,9 +274,105 @@ def test_executor_honors_continuous_processors_and_overrides() -> None:
     assert "remixero_ringmod" in sc_text
 
 
+def test_brief_intent_boosts_hardcore_plans() -> None:
+    from noise_remix.ai.brief import apply_brief_intent, classify_brief
+
+    assert classify_brief("make it hardcore edm")["energy"] == "high"
+    plan = validate_production_plan(_sample_plan(), source_duration=1.0)
+    before_intensity = plan.global_parameters.overall_intensity
+    before_layers = {layer.processor for layer in plan.layers}
+    plan = apply_brief_intent(plan, "make it hardcore edm")
+    plan = validate_production_plan(plan, source_duration=1.0)
+    assert plan.global_parameters.overall_intensity >= max(before_intensity, 0.88)
+    assert plan.global_parameters.source_preservation <= 0.22
+    processors = {layer.processor for layer in plan.layers}
+    assert "stutter" in processors or "stutter" in before_layers
+    assert "destroy" in processors
+    assert "pitch_warp" in processors
+
+
+def test_align_plan_snaps_sections_and_adds_crossfades() -> None:
+    from noise_remix.ai.timing import align_plan_to_analysis, envelope_gain_at
+    from noise_remix.models.analysis import AmplitudeStats, AudioAnalysis, Segment
+
+    analysis = AudioAnalysis(
+        path="x.wav",
+        duration=4.0,
+        sample_rate=44100,
+        channels=2,
+        amplitude=AmplitudeStats(peak=0.5, rms=0.1, mean_abs=0.08),
+        dynamic_range_db=12.0,
+        dynamic_range_label="medium",
+        spectral_centroid_hz=1000.0,
+        spectral_flux=0.2,
+        spectral_flux_label="low",
+        transients=[1.0, 2.0, 3.0],
+        segments=[
+            Segment(start=0.0, end=1.0),
+            Segment(start=1.0, end=2.0),
+            Segment(start=2.0, end=4.0),
+        ],
+        estimated_bpm=120.0,
+    )
+    plan = ProductionPlan(
+        title="t",
+        description="d",
+        duration_seconds=4.0,
+        global_parameters=GlobalParameters(
+            overall_intensity=0.7,
+            primary_mode="destroy",
+            source_preservation=0.3,
+        ),
+        sections=[
+            ProductionSection(
+                start=0.0, end=1.9, name="a", energy=0.4, active_layers=["g"]
+            ),
+            ProductionSection(
+                start=1.9, end=4.0, name="b", energy=0.9, active_layers=["c"]
+            ),
+        ],
+        layers=[
+            AudioLayer(id="g", processor="granular", intensity=0.5),
+            AudioLayer(id="c", processor="comb", intensity=0.7),
+        ],
+    )
+    aligned = align_plan_to_analysis(plan, analysis)
+    assert aligned.sections[0].end in {1.0, 2.0}
+    assert aligned.sections[0].end == aligned.sections[1].start
+    assert any(t.kind == "crossfade" and t.duration >= 0.35 for t in aligned.transitions)
+    assert (
+        envelope_gain_at(
+            time=aligned.sections[0].end + 0.2,
+            start=0.0,
+            end=aligned.sections[0].end + 0.85,
+            fade_in=0.2,
+            fade_out=0.85,
+        )
+        < 1.0
+    )
+
+
+def test_layered_render_includes_fade_envelopes() -> None:
+    from noise_remix.supercollider.generator import generate_patch
+
+    analysis = analyze_audio(FIXTURE)
+    plan = validate_production_plan(_sample_plan(), source_duration=analysis.duration)
+    params = plan_to_remix_parameters(plan, analysis=analysis, seed=11)
+    assert params.details.get("engine") == "layered"
+    layers = params.details["layers"]
+    assert layers
+    assert any(float(layer.get("fade_out") or 0) >= 0.2 for layer in layers)
+    sc_text = generate_patch(
+        params=params,
+        input_wav=FIXTURE,
+        output_wav=FIXTURE.with_name("fade-out.wav"),
+    )
+    assert "\\attack," in sc_text
+    assert "\\release," in sc_text
+
+
 def test_coerce_repairs_missing_sections() -> None:
     from noise_remix.ai.plan_parse import finalize_plan_payload
-    from noise_remix.audio.analysis import analyze_audio
 
     analysis = analyze_audio(FIXTURE)
     payload = {
@@ -391,6 +488,20 @@ def test_provider_override_groq(monkeypatch: pytest.MonkeyPatch) -> None:
     config = load_ai_config(provider_override="groq")
     assert config.provider == "groq"
     assert config.api_key == "g"
+
+
+def test_groq_json_format_error_detection() -> None:
+    from noise_remix.ai.groq_client import _looks_like_json_format_error
+
+    assert _looks_like_json_format_error(
+        Exception(
+            "Error code: 400 - {'error': {'message': \"Failed to validate JSON. "
+            "Please adjust your prompt. See 'failed_generation' for more details.\", "
+            "'type': 'invalid_request_error', 'code': 'json_validate_failed', "
+            "'failed_generation': ''}}"
+        )
+    )
+    assert not _looks_like_json_format_error(Exception("503 UNAVAILABLE"))
 
 
 def test_transient_error_detection() -> None:

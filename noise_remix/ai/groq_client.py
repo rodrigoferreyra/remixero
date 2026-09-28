@@ -3,15 +3,21 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 from noise_remix.ai.config import AIConfig, require_api_key
+from noise_remix.ai.groq_schema import GROQ_PRODUCTION_PLAN_SCHEMA
 from noise_remix.ai.plan_parse import generate_plan_with_repairs, payload_from_chat_response
 from noise_remix.ai.prompts import SYSTEM_INSTRUCTION, build_user_prompt
 from noise_remix.ai.retry import call_with_retries
 from noise_remix.errors import AIConfigError, AIRequestError
 from noise_remix.models.analysis import AudioAnalysis
 from noise_remix.models.production import ProductionPlan
+
+# Prefer json_object: Groq json_schema often returns json_validate_failed
+# (empty failed_generation) on large nested plans.
+_DEFAULT_RESPONSE_MODE = "json_object"
 
 
 def generate_production_plan_groq(
@@ -55,71 +61,97 @@ def generate_production_plan_groq(
     prompt += (
         "\n\nProvider note: audio bytes are not attached on Groq; "
         "rely on the local analysis JSON above.\n"
-        "Return ONLY valid JSON for the production plan schema."
+        "Return ONLY valid JSON for the production plan schema.\n"
+        "If the creative instruction is abstract (genre, mood, vibe), expand it into "
+        "concrete sections/layers/processors yourself — do not leave it vague."
     )
 
-    schema = _groq_json_schema(ProductionPlan)
-    use_json_object = False
+    schema = GROQ_PRODUCTION_PLAN_SCHEMA
+    # json_object is the reliable path; schema mode is attempted only if forced later.
+    response_mode = _DEFAULT_RESPONSE_MODE
 
     def _request_once(correction: str | None) -> object:
-        nonlocal use_json_object
+        nonlocal response_mode
         user_content = prompt
         if correction:
-            user_content = prompt + "\n\n" + correction
-
-        def _json_schema_once() -> object:
-            return client.chat.completions.create(
-                model=config.model,
-                messages=[
-                    {"role": "system", "content": SYSTEM_INSTRUCTION},
-                    {"role": "user", "content": user_content},
-                ],
-                response_format={
-                    "type": "json_schema",
-                    "json_schema": {
-                        "name": "production_plan",
-                        "strict": False,
-                        "schema": schema,
-                    },
-                },
-                temperature=0.7,
+            user_content = (
+                prompt
+                + "\n\n"
+                + correction
+                + "\nKeep the plan simpler if needed: 3–5 sections, 2–4 layers."
             )
 
-        def _json_object_once() -> object:
+        def _create(*, mode: str, temperature: float) -> object:
+            if mode == "json_schema":
+                return client.chat.completions.create(
+                    model=config.model,
+                    messages=[
+                        {"role": "system", "content": SYSTEM_INSTRUCTION},
+                        {"role": "user", "content": user_content},
+                    ],
+                    response_format={
+                        "type": "json_schema",
+                        "json_schema": {
+                            "name": "production_plan",
+                            "strict": False,
+                            "schema": schema,
+                        },
+                    },
+                    temperature=temperature,
+                )
             return client.chat.completions.create(
                 model=config.model,
                 messages=[
                     {
                         "role": "system",
                         "content": SYSTEM_INSTRUCTION
-                        + "\nRespond with a single JSON object only.",
+                        + "\nRespond with a single JSON object only. "
+                        "No markdown fences.",
                     },
                     {
                         "role": "user",
                         "content": user_content
-                        + "\n\nJSON schema (follow closely):\n"
+                        + "\n\nRequired JSON shape (follow closely):\n"
                         + json.dumps(schema),
                     },
                 ],
                 response_format={"type": "json_object"},
-                temperature=0.7,
+                temperature=temperature,
             )
 
-        operation = _json_object_once if use_json_object else _json_schema_once
+        temperature = 0.4 if correction else 0.6
+
+        def _once() -> object:
+            return _create(mode=response_mode, temperature=temperature)
+
         try:
             return call_with_retries(
-                operation=operation,
+                operation=_once,
                 max_retries=config.max_retries,
                 retry_base_seconds=config.retry_base_seconds,
                 retry_max_seconds=config.retry_max_seconds,
                 provider_label="Groq",
             )
         except AIRequestError as exc:
-            if use_json_object or not _looks_like_format_error(exc):
+            if not _looks_like_json_format_error(exc):
                 raise
-            use_json_object = True
+            # Flip mode and retry once.
+            alt = "json_object" if response_mode == "json_schema" else "json_schema"
+            if alt == response_mode:
+                raise
+            print(
+                f"→ Groq {response_mode} response failed JSON validation; "
+                f"retrying with {alt}...",
+                file=sys.stderr,
+                flush=True,
+            )
+            response_mode = alt
+
+            def _alt_once() -> object:
+                return _create(mode=response_mode, temperature=0.3)
+
             return call_with_retries(
-                operation=_json_object_once,
+                operation=_alt_once,
                 max_retries=config.max_retries,
                 retry_base_seconds=config.retry_base_seconds,
                 retry_max_seconds=config.retry_max_seconds,
@@ -132,39 +164,22 @@ def generate_production_plan_groq(
         analysis=analysis,
         duration_seconds=duration_seconds,
         provider_label="Groq",
+        instruction=instruction,
     )
 
 
-def _looks_like_format_error(exc: Exception) -> bool:
+def _looks_like_json_format_error(exc: Exception) -> bool:
     text = str(exc).lower()
     markers = (
+        "json_validate_failed",
+        "failed to validate json",
+        "failed_generation",
         "json_schema",
         "response_format",
         "invalid_request",
-        "400",
+        "invalid json",
         "schema",
         "unsupported",
         "not supported",
     )
     return any(marker in text for marker in markers)
-
-
-def _groq_json_schema(model_cls: type) -> dict:
-    """Prepare a JSON schema suitable for Groq structured outputs."""
-    schema = model_cls.model_json_schema()
-    return _normalize_schema(schema)
-
-
-def _normalize_schema(node: object) -> object:
-    if isinstance(node, dict):
-        cleaned: dict = {}
-        for key, value in node.items():
-            if key in {"title", "examples", "default"}:
-                continue
-            cleaned[key] = _normalize_schema(value)
-        if cleaned.get("type") == "object" and "additionalProperties" not in cleaned:
-            cleaned["additionalProperties"] = False
-        return cleaned
-    if isinstance(node, list):
-        return [_normalize_schema(item) for item in node]
-    return node

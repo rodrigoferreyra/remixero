@@ -7,6 +7,7 @@ import sys
 from collections.abc import Callable
 from typing import Any
 
+from noise_remix.ai.brief import apply_brief_intent
 from noise_remix.ai.repair import parse_production_plan
 from noise_remix.ai.validate import validate_production_plan
 from noise_remix.errors import AIRequestError, ProductionPlanError
@@ -22,18 +23,27 @@ def finalize_plan_payload(
     *,
     analysis: AudioAnalysis,
     duration_seconds: float,
+    instruction: str = "",
 ) -> ProductionPlan:
-    """Coerce raw JSON, Pydantic-validate, then semantically validate."""
+    """Coerce raw JSON, Pydantic-validate, semantically validate, apply brief bias."""
     plan = parse_production_plan(
         payload,
         default_duration=min(duration_seconds, analysis.duration),
         default_primary_mode="destroy",
     )
-    return validate_production_plan(
+    plan = validate_production_plan(
         plan,
         source_duration=analysis.duration,
         max_duration=duration_seconds,
     )
+    if instruction.strip():
+        plan = apply_brief_intent(plan, instruction)
+        plan = validate_production_plan(
+            plan,
+            source_duration=analysis.duration,
+            max_duration=duration_seconds,
+        )
+    return plan
 
 
 def extract_json_payload(text: str) -> object:
@@ -74,6 +84,7 @@ def generate_plan_with_repairs(
     analysis: AudioAnalysis,
     duration_seconds: float,
     provider_label: str,
+    instruction: str = "",
     max_attempts: int = MAX_PLAN_REPAIR_ATTEMPTS + 1,
 ) -> ProductionPlan:
     """Call the provider, repairing/retrying when plan validation fails."""
@@ -87,6 +98,7 @@ def generate_plan_with_repairs(
                 payload,
                 analysis=analysis,
                 duration_seconds=duration_seconds,
+                instruction=instruction,
             )
         except (ProductionPlanError, AIRequestError) as exc:
             last_error = exc
