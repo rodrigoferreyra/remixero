@@ -81,6 +81,9 @@ def test_feedback_is_bounded() -> None:
     assert "Limiter.ar" in text
     assert "LocalIn.ar" in text
     assert "remixero_feedback" in text
+    # pan/amp must be SynthDef controls — undeclared names hang SC NRT.
+    assert "amp=0.85, pan=0" in text
+    assert "RandSeed.ir(1, randSeed)" not in text
 
 
 def test_destroy_patch_generation() -> None:
@@ -127,3 +130,53 @@ def test_stutter_builds_held_events() -> None:
     # High hold probability should repeat some buffer positions.
     positions = [event["buf_pos"] for event in events]
     assert len(set(positions)) < len(positions)
+
+
+def test_rand_depth_scales_with_intensity() -> None:
+    from noise_remix.remix.chaos import rand_depth
+
+    assert rand_depth(0.0) == 0.05
+    assert rand_depth(1.0) == 0.85
+    assert rand_depth(0.0) < rand_depth(0.5) < rand_depth(1.0)
+
+
+def test_modes_record_rand_depth_and_are_seed_deterministic() -> None:
+    analysis = analyze_audio(FIXTURE)
+    for name in ("granular", "destroy", "feedback", "comb", "pump"):
+        mode = get_mode(name)
+        a = mode.generate(analysis=analysis, intensity=0.7, seed=123, duration=1.0)
+        b = mode.generate(analysis=analysis, intensity=0.7, seed=123, duration=1.0)
+        assert a.details["rand_depth"] == b.details["rand_depth"]
+        assert 0.05 <= float(a.details["rand_depth"]) <= 0.85
+        # Parameter payloads match for the same seed.
+        assert a.model_dump() == b.model_dump()
+
+
+def test_generated_patches_include_seeded_sc_randomness() -> None:
+    analysis = analyze_audio(FIXTURE)
+    out = Path("/tmp/remixero-rand-test.wav")
+    for name in ("granular", "destroy", "feedback", "pump"):
+        params = get_mode(name).generate(
+            analysis=analysis, intensity=0.8, seed=42, duration=1.0
+        )
+        text = generate_patch(params=params, input_wav=FIXTURE, output_wav=out)
+        assert "RandSeed" in text
+        assert "remixero_randseed" in text
+        assert "LFNoise1" in text
+        assert "\\randDepth" in text
+        assert float(params.details["rand_depth"]) > 0.0
+
+
+def test_low_intensity_still_emits_rand_controls_with_small_depth() -> None:
+    analysis = analyze_audio(FIXTURE)
+    params = get_mode("feedback").generate(
+        analysis=analysis, intensity=0.0, seed=7, duration=1.0
+    )
+    assert params.details["rand_depth"] == 0.05
+    text = generate_patch(
+        params=params,
+        input_wav=FIXTURE,
+        output_wav=Path("/tmp/remixero-rand-low.wav"),
+    )
+    assert "\\randDepth, 0.050000" in text
+    assert "RandSeed" in text

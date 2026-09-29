@@ -38,7 +38,8 @@ In both paths, SuperCollider owns audio synthesis. The AI provider never emits S
 
 - **Classic remix modes** — apply one procedural transform such as granular, destroy, collapse, or feedback.
 - **AI creative director** — describe an intention in natural language; Remixero builds a structured multi-layer production plan, then renders it with the same synthesis engine used by classic modes.
-- **Deterministic seeds** — the same source, mode, parameters, and seed produce the same remix parameters.
+- **Deterministic seeds** — the same source, mode, parameters, and seed produce the same remix parameters and the same SuperCollider random stream.
+- **Intensity-linked chaos** — higher intensity widens Python jitters and deepens live SuperCollider modulation (`LFNoise`, `TRand`, `Dust`) via `rand_depth`.
 - **Inspectable artifacts** — optional production-plan JSON, SuperCollider patch files, analysis JSON, and render metadata support debugging and iteration.
 - **Local-first workflow** — analysis and rendering run on your machine; optional AI providers only design plans, never write synthesis code.
 
@@ -94,17 +95,22 @@ When the plan provider already uploads audio for the full plan call (`--provider
 
 **Intensity** is a transformation parameter in the range `0.0`–`1.0`. Each remix strategy maps intensity onto its own DSP controls. Intensity is not implemented as a final volume multiply.
 
+Higher intensity also raises **`rand_depth`** (about `0.05`–`0.85`). That value:
+
+- widens seeded Python jitters (rates, density, pan, filter spreads, and similar)
+- deepens live SuperCollider modulation (`LFNoise`, `TRand`, `Dust`) on grains, fragments, and continuous layers
+
 All procedural randomness uses an explicit **seed**.
 
 - Pass an integer with **`--seed`** to lock the result.
 - Pass *random* (the default) to draw a new seed for the run.
 - With **`--variations`**, each variation derives a distinct seed from the base seed.
 
-The same source file, mode or plan configuration, parameters, and seed produce the same generated remix configuration. Floating-point audio samples are not guaranteed bit-identical across machines or SuperCollider versions.
+The same source file, mode or plan configuration, parameters, and seed produce the same generated remix configuration, including the SuperCollider random stream (`RandSeed` at the start of each NRT score). Floating-point audio samples are not guaranteed bit-identical across machines or SuperCollider versions.
 
 Estimated BPM and other heuristic analysis fields are approximate. Treat them as arrangement hints, not authoritative tempo truth.
 
-Every successful render writes a JSON metadata file beside the WAV with source hash, seed, intensity, mode, parameter summaries, and analysis summaries.
+Every successful render writes a JSON metadata file beside the WAV with source hash, seed, intensity, mode, parameter summaries (including `rand_depth` when present), and analysis summaries.
 
 ---
 

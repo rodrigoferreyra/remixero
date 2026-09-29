@@ -18,6 +18,7 @@ from noise_remix.models.analysis import AudioAnalysis
 from noise_remix.models.configuration import RemixParameters
 from noise_remix.models.production import AudioLayer, ProductionPlan
 from noise_remix.remix import get_mode
+from noise_remix.remix.chaos import rand_depth
 from noise_remix.remix.feedback import MAX_FEEDBACK
 
 # Event engines: timed grain/fragment lists shifted into the layer window.
@@ -145,6 +146,7 @@ def plan_to_remix_parameters(
                 "drive": round(1.0 + overall * 0.8, 3),
                 "makeup": round(0.85 + (1.0 - preservation) * 0.2, 3),
             },
+            "rand_depth": round(rand_depth(overall), 6),
         },
     )
 

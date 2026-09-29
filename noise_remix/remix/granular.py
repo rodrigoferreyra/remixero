@@ -5,6 +5,7 @@ from __future__ import annotations
 from noise_remix.models.analysis import AudioAnalysis
 from noise_remix.models.configuration import RemixParameters
 from noise_remix.remix.base import intensity_lerp, register
+from noise_remix.remix.chaos import attach_rand_depth, rand_depth
 from noise_remix.seed import make_rng
 
 
@@ -25,14 +26,15 @@ class GranularMode:
         rng = make_rng(seed)
         source_duration = analysis.duration
         segments = analysis.segments or []
+        depth = rand_depth(intensity)
 
         grain_duration = intensity_lerp(intensity, 0.12, 0.025)
-        density = intensity_lerp(intensity, 8.0, 45.0)  # grains per second
-        position_jitter = intensity_lerp(intensity, 0.0, 0.35)
-        rate_jitter = intensity_lerp(intensity, 0.0, 0.55)
-        reverse_probability = intensity_lerp(intensity, 0.0, 0.45)
-        pan_jitter = intensity_lerp(intensity, 0.1, 1.0)
-        amp_jitter = intensity_lerp(intensity, 0.05, 0.35)
+        density = intensity_lerp(intensity, 8.0, 45.0 * (1.0 + 0.3 * depth))
+        position_jitter = intensity_lerp(intensity, 0.0, 0.35 * (1.0 + 0.5 * depth))
+        rate_jitter = intensity_lerp(intensity, 0.0, 0.55 * (1.0 + 0.45 * depth))
+        reverse_probability = intensity_lerp(intensity, 0.0, 0.45 * (1.0 + 0.2 * depth))
+        pan_jitter = intensity_lerp(intensity, 0.1, min(1.0, 1.0 * (0.7 + 0.5 * depth)))
+        amp_jitter = intensity_lerp(intensity, 0.05, 0.35 * (1.0 + 0.4 * depth))
 
         n_grains = max(1, int(duration * density))
         max_grains = 3000
@@ -47,6 +49,11 @@ class GranularMode:
             onset = index * spacing
             if onset >= duration:
                 break
+            if depth > 0.2 and rng.random() < depth * 0.5:
+                onset = min(
+                    duration - 0.001,
+                    max(0.0, onset + rng.uniform(-spacing * 0.3 * depth, spacing * 0.4 * depth)),
+                )
             if segments:
                 segment = segments[rng.randrange(len(segments))]
                 local = rng.random() * max(1e-6, segment.duration - grain_duration)
@@ -90,12 +97,15 @@ class GranularMode:
             duration=duration,
             sample_rate=analysis.sample_rate,
             channels=analysis.channels,
-            details={
-                "grain_duration": grain_duration,
-                "density": density,
-                "position_jitter": position_jitter,
-                "rate_jitter": rate_jitter,
-                "reverse_probability": reverse_probability,
-                "grains": grains,
-            },
+            details=attach_rand_depth(
+                {
+                    "grain_duration": grain_duration,
+                    "density": density,
+                    "position_jitter": position_jitter,
+                    "rate_jitter": rate_jitter,
+                    "reverse_probability": reverse_probability,
+                    "grains": grains,
+                },
+                intensity,
+            ),
         )

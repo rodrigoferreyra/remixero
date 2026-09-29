@@ -5,6 +5,7 @@ from __future__ import annotations
 from noise_remix.models.analysis import AudioAnalysis
 from noise_remix.models.configuration import RemixParameters
 from noise_remix.remix.base import intensity_lerp, register
+from noise_remix.remix.chaos import attach_rand_depth, rand_depth
 from noise_remix.remix.fragments import pick_buf_pos
 from noise_remix.seed import make_rng
 
@@ -24,11 +25,12 @@ class StutterMode:
         if not 0.0 <= intensity <= 1.0:
             raise ValueError("intensity must be in [0, 1]")
         rng = make_rng(seed)
+        depth = rand_depth(intensity)
 
         slice_dur = intensity_lerp(intensity, 0.08, 0.018)
-        density = intensity_lerp(intensity, 6.0, 28.0)
+        density = intensity_lerp(intensity, 6.0, 28.0 * (1.0 + 0.25 * depth))
         hold_probability = intensity_lerp(intensity, 0.35, 0.85)
-        rate_jitter = intensity_lerp(intensity, 0.0, 0.35)
+        rate_jitter = intensity_lerp(intensity, 0.0, 0.35 * (1.0 + 0.5 * depth))
         distort = intensity_lerp(intensity, 0.05, 0.55)
         lpf = intensity_lerp(intensity, 14000.0, 4000.0)
         hpf = intensity_lerp(intensity, 40.0, 200.0)
@@ -45,13 +47,18 @@ class StutterMode:
             onset = index * spacing
             if onset >= duration:
                 break
+            if depth > 0.25 and rng.random() < depth * 0.4:
+                onset = min(
+                    duration - 0.001,
+                    max(0.0, onset + rng.uniform(-spacing * 0.2, spacing * 0.25)),
+                )
             if held_pos is None or rng.random() > hold_probability:
                 held_pos = pick_buf_pos(
                     rng,
                     segments=segments,
                     source_duration=source_duration,
                     grain_duration=slice_dur,
-                    position_jitter=0.02 * intensity,
+                    position_jitter=0.02 * intensity * (1.0 + depth),
                 )
             rate = 1.0 + rng.uniform(-rate_jitter, rate_jitter)
             rate = max(0.5, min(2.0, rate))
@@ -81,12 +88,15 @@ class StutterMode:
             duration=duration,
             sample_rate=analysis.sample_rate,
             channels=analysis.channels,
-            details={
-                "engine": "fragments",
-                "slice_dur": round(slice_dur, 6),
-                "density": round(density, 6),
-                "hold_probability": round(hold_probability, 6),
-                "feedback_amount": round(intensity_lerp(intensity, 0.0, 0.25), 6),
-                "events": events,
-            },
+            details=attach_rand_depth(
+                {
+                    "engine": "fragments",
+                    "slice_dur": round(slice_dur, 6),
+                    "density": round(density, 6),
+                    "hold_probability": round(hold_probability, 6),
+                    "feedback_amount": round(intensity_lerp(intensity, 0.0, 0.25), 6),
+                    "events": events,
+                },
+                intensity,
+            ),
         )

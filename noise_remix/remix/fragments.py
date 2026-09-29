@@ -6,6 +6,7 @@ from random import Random
 
 from noise_remix.models.analysis import AudioAnalysis, Segment
 from noise_remix.remix.base import intensity_lerp
+from noise_remix.remix.chaos import rand_depth
 
 
 def pick_buf_pos(
@@ -46,12 +47,17 @@ def build_fragment_cloud(
     max_events: int = 3000,
 ) -> tuple[list[dict[str, float]], dict[str, float]]:
     """Build timed buffer fragments with optional time-evolving collapse behavior."""
-    density = intensity_lerp(intensity, *density_range)
+    depth = rand_depth(intensity)
+    dens_lo, dens_hi = density_range
+    dens_hi = dens_hi * (1.0 + 0.35 * depth)
+    density = intensity_lerp(intensity, dens_lo, dens_hi)
     base_dur = intensity_lerp(intensity, *dur_range)
-    rate_jitter = intensity_lerp(intensity, *rate_jitter_range)
+    rate_lo, rate_hi = rate_jitter_range
+    rate_jitter = intensity_lerp(intensity, rate_lo, rate_hi * (1.0 + 0.25 * depth))
     reverse_p = intensity_lerp(intensity, *reverse_range)
     distort = intensity_lerp(intensity, *distort_range)
-    position_jitter = intensity_lerp(intensity, *position_jitter_range)
+    pos_lo, pos_hi = position_jitter_range
+    position_jitter = intensity_lerp(intensity, pos_lo, pos_hi * (1.0 + 0.4 * depth))
     lpf = intensity_lerp(intensity, *lpf_range)
     hpf = intensity_lerp(intensity, *hpf_range)
 
@@ -70,22 +76,33 @@ def build_fragment_cloud(
         onset = index * spacing
         if onset >= duration:
             break
+        if depth > 0.2 and rng.random() < depth * 0.55:
+            onset = min(
+                duration - 0.001,
+                max(
+                    0.0,
+                    onset
+                    + rng.uniform(-spacing * 0.35 * depth, spacing * 0.45 * depth),
+                ),
+            )
         progress = onset / duration if duration > 0 else 0.0
         if progress_curve:
-            # Collapse: tighten and darken over time.
             local_dur = base_dur * (1.0 - 0.75 * progress)
             local_density_boost = 1.0 + progress * 2.0
             local_lpf = lpf * (1.0 - 0.7 * progress)
             local_hpf = hpf + (1200.0 * progress)
             local_distort = min(1.0, distort + progress * 0.45)
-            # Occasional denser bursts later.
             if rng.random() < progress * 0.35:
-                onset = min(duration - 0.001, onset + rng.uniform(0.0, spacing / local_density_boost))
+                onset = min(
+                    duration - 0.001,
+                    onset + rng.uniform(0.0, spacing / local_density_boost),
+                )
         else:
-            local_dur = base_dur * rng.uniform(0.6, 1.4)
-            local_lpf = lpf * rng.uniform(0.7, 1.2)
-            local_hpf = hpf * rng.uniform(0.5, 1.5)
-            local_distort = min(1.0, distort * rng.uniform(0.5, 1.3))
+            dur_spread = 0.55 + 0.35 * depth
+            local_dur = base_dur * rng.uniform(1.0 - dur_spread, 1.0 + dur_spread)
+            local_lpf = lpf * rng.uniform(0.65, 1.25)
+            local_hpf = hpf * rng.uniform(0.45, 1.6)
+            local_distort = min(1.0, distort * rng.uniform(0.45, 1.4))
 
         local_dur = max(0.012, local_dur)
         buf_pos = pick_buf_pos(
@@ -101,7 +118,7 @@ def build_fragment_cloud(
             rate = -abs(rate)
 
         overlap = max(1.0, density * local_dur)
-        amp = max(0.03, (amp_base / (overlap**0.5)) * rng.uniform(0.7, 1.2))
+        amp = max(0.03, (amp_base / (overlap**0.5)) * rng.uniform(0.65, 1.25))
         pan = rng.uniform(-1.0, 1.0)
 
         events.append(
@@ -127,5 +144,6 @@ def build_fragment_cloud(
         "lpf": lpf,
         "hpf": hpf,
         "position_jitter": position_jitter,
+        "rand_depth": round(depth, 6),
     }
     return events, stats

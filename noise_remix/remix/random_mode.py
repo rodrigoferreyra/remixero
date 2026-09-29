@@ -26,19 +26,20 @@ class RandomMode:
         rng = make_rng(seed)
 
         # Choose a palette of primitives deterministically from the seed.
-        use_extreme_rates = rng.random() < intensity_lerp(intensity, 0.2, 0.9)
-        use_heavy_distort = rng.random() < intensity_lerp(intensity, 0.15, 0.85)
-        use_narrow_band = rng.random() < intensity_lerp(intensity, 0.1, 0.7)
-        use_reverse_bias = rng.random() < intensity_lerp(intensity, 0.2, 0.8)
-        use_stutter = rng.random() < intensity_lerp(intensity, 0.25, 0.9)
+        # Mid/high intensity leans harder into extreme branches.
+        use_extreme_rates = rng.random() < intensity_lerp(intensity, 0.28, 0.95)
+        use_heavy_distort = rng.random() < intensity_lerp(intensity, 0.22, 0.92)
+        use_narrow_band = rng.random() < intensity_lerp(intensity, 0.15, 0.8)
+        use_reverse_bias = rng.random() < intensity_lerp(intensity, 0.28, 0.9)
+        use_stutter = rng.random() < intensity_lerp(intensity, 0.32, 0.95)
 
-        density_hi = 50.0 if use_stutter else 28.0
-        dur_lo = 0.018 if use_stutter else 0.04
-        rate_hi = 2.2 if use_extreme_rates else 0.85
-        distort_hi = 0.95 if use_heavy_distort else 0.45
-        reverse_hi = 0.75 if use_reverse_bias else 0.35
-        lpf_lo = 1200.0 if use_narrow_band else 4000.0
-        hpf_hi = 1200.0 if use_narrow_band else 400.0
+        density_hi = 60.0 if use_stutter else 34.0
+        dur_lo = 0.015 if use_stutter else 0.035
+        rate_hi = 2.6 if use_extreme_rates else 1.0
+        distort_hi = 0.95 if use_heavy_distort else 0.5
+        reverse_hi = 0.8 if use_reverse_bias else 0.4
+        lpf_lo = 1000.0 if use_narrow_band else 3800.0
+        hpf_hi = 1400.0 if use_narrow_band else 450.0
 
         events, stats = build_fragment_cloud(
             analysis=analysis,
@@ -50,11 +51,11 @@ class RandomMode:
             rate_jitter_range=(0.1, rate_hi),
             reverse_range=(0.05, reverse_hi),
             distort_range=(0.05, distort_hi),
-            position_jitter_range=(0.05, 0.55),
+            position_jitter_range=(0.05, 0.7),
             lpf_range=(14000.0, lpf_lo),
             hpf_range=(30.0, hpf_hi),
             amp_base=0.27,
-            progress_curve=rng.random() < 0.4,
+            progress_curve=rng.random() < intensity_lerp(intensity, 0.35, 0.65),
         )
 
         return RemixParameters(
